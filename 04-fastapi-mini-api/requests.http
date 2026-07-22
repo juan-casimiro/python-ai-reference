@@ -1,0 +1,18 @@
+### Get all books
+GET http://127.0.0.1:8000/books
+
+### Get one book by index
+GET http://127.0.0.1:8000/books/0
+
+### Get out-of-range index (expect 404)
+GET http://127.0.0.1:8000/books/99
+
+### Post a new book
+POST http://127.0.0.1:8000/books
+Content-Type: application/json
+
+{
+  "title": "Effective Java",
+  "author": "Joshua Bloch",
+  "year": 2018
+}
