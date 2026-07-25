@@ -9,27 +9,31 @@
 
 # TODO 3: Test it via curl, REST Client, or /docs with a real paragraph of text
 
+import asyncio
 import io
 from dotenv import load_dotenv
-from anthropic import Anthropic
 from anthropic.types import TextBlock
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from anthropic import AsyncAnthropic
+from fastapi import FastAPI, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
-MAX_BYTES = 20 * 1024 * 1024
+MAX_BYTES = 10 * 1024 * 1024  # 10 MB
 MIN_BYTES = 100
 
-MAX_TEXT_CHARS = 15_000
+MIN_TEXT_CHARS = 100
+MAX_TEXT_CHARS = 100_000  # ~100 pages
+
+DEF_CHUNK_TEXT_SIZE = 8_000  # ~4-5 pages per chunk
 
 app = FastAPI()
 
 load_dotenv()
-client = Anthropic()
+client = AsyncAnthropic()
 
 
 class SummaryRequest(BaseModel):
-    text: str = Field(min_length=20)
+    text: str = Field(min_length=MIN_TEXT_CHARS, max_length=MAX_TEXT_CHARS)
 
 
 class SummaryResponse(BaseModel):
@@ -43,24 +47,67 @@ def validate_content_size(size: int):
         raise HTTPException(400, "File too small")
 
 
-def validate_prompt_length(text: str):
-    if len(text) < MIN_BYTES:
-        raise HTTPException(400, "Extracted text too short")
-    if len(text) > MAX_TEXT_CHARS:
-        raise HTTPException(413, "Extracted text too long")
+def validate_content_text_size(size: int):
+    if size > MAX_TEXT_CHARS:
+        raise HTTPException(413, "Content too large")
+    if size < MIN_TEXT_CHARS:
+        raise HTTPException(400, "Content too small")
 
 
-def ask(prompt: str, system: str | None = None) -> str:
-    validate_prompt_length(prompt)
+def chunk_text(text: str, chunk_size: int = DEF_CHUNK_TEXT_SIZE) -> list[str]:
+    paragraphs = text.split("\n\n")
+    chunks: list[str] = []
+    current = ""
+
+    for para in paragraphs:
+        if len(para) > chunk_size:
+            if current:
+                chunks.append(current.strip())
+                current = ""
+            for i in range(0, len(para), chunk_size):
+                chunks.append(para[i : i + chunk_size])
+            continue
+
+        if current and len(current) + len(para) > chunk_size:
+            chunks.append(current.strip())
+            current = para
+        else:
+            current += ("\n\n" if current else "") + para
+
+    if current:
+        chunks.append(current.strip())
+
+    return chunks
+
+
+async def ask_in_batches(prompt: str, system: str | None = None) -> str:
+    chunks = chunk_text(prompt)
+
+    print("number of chunks: " + str(len(chunks)))
+    summaries_futures = []
+    for chunk in chunks:
+        summaries_futures.append(ask(chunk, system))
+
+    summaries = await asyncio.gather(*summaries_futures)
+
+    summary = " ".join(summaries)
+    print(summary)
+    return await ask(
+        summary,
+        "Combine these partial summaries into one concise, coherent summary.",
+    )
+
+
+async def ask(prompt: str, system: str | None = None) -> str:
     kwargs = {
         "model": "claude-haiku-4-5-20251001",
-        "max_tokens": 200,
+        "max_tokens": 2048,
         "messages": [{"role": "user", "content": prompt}],
     }
     if system is not None:
         kwargs["system"] = system
 
-    response = client.messages.create(**kwargs)
+    response = await client.messages.create(**kwargs)
 
     match response.content[0]:
         case TextBlock(text=text):
@@ -70,12 +117,13 @@ def ask(prompt: str, system: str | None = None) -> str:
 
 
 @app.post("/summarize")
-def post_summary(summary_request: SummaryRequest) -> SummaryResponse:
+async def post_summary(summary_request: SummaryRequest) -> SummaryResponse:
 
-    summary = ask(
+    summary = await ask_in_batches(
         prompt=summary_request.text,
         system="Summarize the following text concisely, in 2-3 sentences.",
     )
+
     return SummaryResponse(summary=summary)
 
 
@@ -96,7 +144,9 @@ async def create_upload_file(file: UploadFile):
     else:
         text = contents.decode("utf-8")
 
-    summary = ask(
+    validate_content_text_size(len(text))
+
+    summary = await ask_in_batches(
         prompt=text,
         system="Summarize the following text concisely, in 2-3 sentences.",
     )
