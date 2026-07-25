@@ -11,6 +11,7 @@
 
 import asyncio
 import io
+import re
 from dotenv import load_dotenv
 from anthropic.types import TextBlock
 from anthropic import AsyncAnthropic
@@ -55,11 +56,15 @@ def validate_content_text_size(size: int):
 
 
 def chunk_text(text: str, chunk_size: int = DEF_CHUNK_TEXT_SIZE) -> list[str]:
-    paragraphs = text.split("\n\n")
+    paragraphs = re.split(r"\n\s*\n", text)
     chunks: list[str] = []
     current = ""
 
     for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+
         if len(para) > chunk_size:
             if current:
                 chunks.append(current.strip())
@@ -91,7 +96,6 @@ async def ask_in_batches(prompt: str, system: str | None = None) -> str:
     summaries = await asyncio.gather(*summaries_futures)
 
     summary = " ".join(summaries)
-    print(summary)
     return await ask(
         summary,
         "Combine these partial summaries into one concise, coherent summary.",
