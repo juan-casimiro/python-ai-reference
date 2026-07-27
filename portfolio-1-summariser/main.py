@@ -1,14 +1,3 @@
-# TODO 1: A FastAPI app with one endpoint: POST /summarize
-#   - Accepts a Pydantic model with a single field: text (str)
-#   - Calls Claude (reuse your ask() function from Module 5, or inline it)
-#     with a system prompt instructing it to summarize concisely
-#   - Returns a Pydantic response model with a single field: summary (str)
-
-# TODO 2: Add basic validation - if `text` is empty or under ~20 characters,
-# raise an HTTPException (400) rather than wasting an API call
-
-# TODO 3: Test it via curl, REST Client, or /docs with a real paragraph of text
-
 import asyncio
 import io
 import re
@@ -26,6 +15,12 @@ MIN_TEXT_CHARS = 100
 MAX_TEXT_CHARS = 100_000  # ~100 pages
 
 DEF_CHUNK_TEXT_SIZE = 8_000  # ~4-5 pages per chunk
+
+SUMMARY_SYSTEM_PROMPT = (
+    "Summarize the following text. Use a brief intro paragraph, then organize "
+    "key points under clear markdown headers (##) with bullet points where "
+    "appropriate. Be concise but comprehensive."
+)
 
 app = FastAPI()
 
@@ -125,7 +120,7 @@ async def post_summary(summary_request: SummaryRequest) -> SummaryResponse:
 
     summary = await ask_in_batches(
         prompt=summary_request.text,
-        system="Summarize the following text concisely, in 2-3 sentences.",
+        system=SUMMARY_SYSTEM_PROMPT,
     )
 
     return SummaryResponse(summary=summary)
@@ -152,7 +147,7 @@ async def create_upload_file(file: UploadFile):
 
     summary = await ask_in_batches(
         prompt=text,
-        system="Summarize the following text concisely, in 2-3 sentences.",
+        system=SUMMARY_SYSTEM_PROMPT,
     )
 
     return SummaryResponse(summary=summary)
